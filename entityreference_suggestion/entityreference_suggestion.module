@@ -1,0 +1,273 @@
+<?php
+/*
+ * Implement hook_theme().
+ */
+function entityreference_suggestion_theme() {
+  return array(
+    'entityreference_suggestion_suggestions' => array(
+      'variables' => array('suggestions' => NULL, 'method' => NULL, 'widget' => NULL),
+    ),
+  );
+}
+
+/*
+ * Implementation of hook_field_widget_settings_form_alter()
+ */
+function entityreference_suggestion_form_field_ui_field_edit_form_alter(&$form, &$form_state) {
+  // Check that this field is an entityreference field
+  $field_info = field_info_field($form['#instance']['field_name']);
+  if ($field_info['module'] == 'entityreference') {
+    // Save the field instance ID, used to make the AJAX wrapper unique
+    $field_instance_id = $form['#instance']['id'];
+
+    $form['instance']['settings']['entityreference_suggestion'] = array(
+      '#title' => t('Entity Reference Suggestion'),
+      '#type' => 'fieldset',
+    );
+
+    // Detect saved setting for 'enabled'
+    // Check for AJAX update first
+    if(isset($form_state['values']['instance']['settings']['entityreference_suggestion']['enabled']))
+      $enabled = $form_state['values']['instance']['settings']['entityreference_suggestion']['enabled'];
+    else if(isset($form['#instance']['settings']['entityreference_suggestion']['enabled']))
+      $enabled = $form['#instance']['settings']['entityreference_suggestion']['enabled'];
+
+    $form['instance']['settings']['entityreference_suggestion']['enabled'] = array(
+      '#title' => t('Enable Suggestions'),
+      '#type' => 'checkbox',
+      '#ajax' => array(
+        'callback' => 'entityreference_suggestion_widget_enabled_callback',
+        'wrapper' => 'entityreference_suggestion_widget_settings_'.$field_instance_id,
+      ),
+      '#default_value' => isset($enabled) ? $enabled : NULL,
+    );
+
+    $form['instance']['settings']['entityreference_suggestion']['method'] = array(
+      '#type' => 'markup',
+      '#prefix' => '<div id="entityreference_suggestion_widget_settings_'.$field_instance_id.'">',
+      '#suffix' => '</div>',
+    );
+
+    if($enabled) {
+      // Check for saved method setting
+      if(isset($form['#instance']['settings']['entityreference_suggestion']['method']))
+        $method = $form['#instance']['settings']['entityreference_suggestion']['method'];
+      // Display suggestion method options
+      $form['instance']['settings']['entityreference_suggestion']['method'] = array(
+        '#prefix' => '<div id="entityreference_suggestion_widget_settings_'.$field_instance_id.'">',
+        '#suffix' => '</div>',
+        '#title' => t('Suggestion Method'),
+        '#type' => 'select',
+        '#options' => array(
+          'popular' => t('Popular Selections'),
+          'selected' => t('Recently Selected'),
+          'created' => t('Recently Created'),
+        ),
+        '#default_value' => isset($method) ? $method : NULL,
+      );
+    }
+  }
+}
+
+/*
+ * AJAX callback for the field settings form
+ */
+function entityreference_suggestion_widget_enabled_callback($form, $form_state) {
+  return $form['instance']['settings']['entityreference_suggestion']['method'];
+}
+
+/*
+ * Implementation of hook_field_widget_form_alter()
+ */
+function entityreference_suggestion_field_widget_form_alter(&$element, &$form_state, $context) {
+  // Are we on the node edit form, and enabled for this widget?
+  if(isset($context['form']['#node_edit_form']) && isset($context['instance']['settings']['entityreference_suggestion']['enabled'])) {
+
+    // Add front end JS
+    drupal_add_js(drupal_get_path('module', 'entityreference_suggestion').'/entityreference_suggestion.js');
+
+    // Build suggestions using method set on field instance
+    $method = $context['instance']['settings']['entityreference_suggestion']['method'];
+    switch($method) {
+      case 'popular':
+        $suggestions = _entityreference_suggestion_popular_selections($element, $context);
+        break;
+      case 'selected':
+        $suggestions = _entityreference_suggestion_recently_selected($element, $context);
+        break;
+      case 'created':
+        $suggestions = _entityreference_suggestion_recently_created($element, $context);
+        break;
+    }
+
+    // If we have suggestions, theme them and add them to the field suffix
+    if(is_array($suggestions)){
+      $vars = array(
+        'suggestions' => $suggestions,
+        // Include method to provide label
+        'method' => $method,
+        // Include widget type to allow front-end JS to interact appropriately
+        'widget' => $context['instance']['widget']['type'],
+      );
+
+      $element['#suffix'] = theme('entityreference_suggestion_suggestions', $vars);
+    }
+  }
+}
+
+/*
+ * Theme suggestions
+ */
+function theme_entityreference_suggestion_suggestions($vars) {
+  $suggestions_output = array();
+
+  // Build suggestion links
+  foreach($vars['suggestions'] as $suggestion) {
+    $suggestions_output[] = '<a href="javascript:void(0);" class="enitityreference_suggestion" nid="'.$suggestion['nid'].
+                            '" widget="'.$vars['widget'].'" title="'.$suggestion['description'].'">'.$suggestion['title'].'</a>';
+  }
+
+  // Create a clean label
+  $labels = array(
+    'popular' => t('Popular Entities'),
+    'selected' => t('Recently Selected Entities'),
+    'created' => t('Recently Created Entities'),
+  );
+
+  return $labels[$vars['method']] . ': ' . implode(', ', $suggestions_output);
+}
+
+/*
+ * Get popular suggestions
+ */
+function _entityreference_suggestion_popular_selections($element, $context) {
+  $field_name = $context['instance']['field_name'];
+  // Get the bundles this field is currently used on
+  $field_instances = field_read_instances(array('field_name' => $field_name));
+  $bundles = array();
+  foreach($field_instances as $field_instance){
+    $bundles[] = $field_instance['bundle'];
+  }
+
+  // Query this field's table for recent entries
+  // Join the node table and order by created date desc
+  // Set to distinct to prevent duplicates
+  $query = db_select('field_data_'.$field_name, 'f');
+  $query->join('node', 'n', 'f.entity_id = n.nid');
+  $query->fields('f', array($field_name.'_target_id'))
+    ->condition('n.status', 1);
+
+  // If bundles are set, add condition
+  if(count($bundles))
+    $query->condition('n.type', $bundles, 'IN');
+
+  $result = $query->execute();
+
+  // Count the number of times each node shows up
+  $nidCount = array();
+  $suggestions = array();
+  foreach ($result as $record) {
+    $record = (array) $record;
+    if(!isset($nidCount[$record[$field_name.'_target_id']]))
+      $nidCount[$record[$field_name.'_target_id']] = 0;
+    $nidCount[$record[$field_name.'_target_id']]++;
+  }
+
+  // Sort high to low
+  arsort($nidCount);
+
+  // Build suggestions
+  foreach($nidCount as $nid => $count) {
+    $node = node_load($nid);
+    $suggestions[] = array(
+      'nid' => $nid,
+      'title' => $node->title,
+      'description' => t('Selected @count times', array('@count' => $count)),
+    );
+  }
+
+  return $suggestions;
+}
+
+/*
+ * Get recent selections
+ */
+function _entityreference_suggestion_recently_selected($element, $context) {
+  $field_name = $context['instance']['field_name'];
+  // Get the bundles this field is currently used on
+  $field_instances = field_read_instances(array('field_name' => $field_name));
+  $bundles = array();
+  foreach($field_instances as $field_instance){
+    $bundles[] = $field_instance['bundle'];
+  }
+
+  // Query this field's table for recent entries
+  // Join the node table and order by created date desc
+  // Set to distinct to prevent duplicates
+  $query = db_select('field_data_'.$field_name, 'f');
+  $query->join('node', 'n', 'f.entity_id = n.nid');
+  $query->fields('f', array($field_name.'_target_id'))
+    ->fields('n', array('title', 'changed'))
+    ->distinct()
+    ->condition('n.status', 1)
+    ->orderBy('n.created', 'DESC')
+    ->range(0, 5);
+
+  // If bundles are set, add condition
+  if(count($bundles))
+    $query->condition('n.type', $bundles, 'IN');
+
+  $result = $query->execute();
+
+  $suggestions = array();
+  foreach ($result as $record) {
+    $record = (array) $record;
+    $suggestions[] = array(
+      'nid' => $record[$field_name.'_target_id'],
+      'title' => $record['title'],
+      'description' => t('Selected on: @date', array('@date' => format_date($record['changed']))),
+    );
+  }
+
+  return $suggestions;
+}
+
+/*
+ * Get recently created entities
+ */
+function _entityreference_suggestion_recently_created($element, $context) {
+  // Get the bundles we should be looking at from the field settings
+  $bundles = array_keys($context['field']['settings']['handler_settings']['target_bundles']);
+
+  // Exclude current nid, if available
+  $current_nid = $context['form']['nid']['#value'] ? $context['form']['nid']['#value'] : 0;
+
+  // Perform EntityFieldQuery to get recently created entities
+  $query = new EntityFieldQuery();
+  $query->entityCondition('entity_type', 'node');
+
+  // If bundles are set, add condition
+  if(count($bundles))
+    $query->entityCondition('bundle', $bundles, 'IN');
+
+  $query->propertyCondition('status', 1)
+    ->propertyCondition('nid', $current_nid, '!=')
+    ->propertyOrderBy('created', 'desc') //most recent first
+    ->range(0,5);
+  $result = $query->execute();
+
+  // Check for results
+  if (isset($result['node'])) {
+    // Build suggestions array
+    $suggestions = array();
+    foreach($result['node'] as $node) {
+      $node = node_load($node->nid);
+      $suggestions[] = array(
+        'nid' => $node->nid,
+        'title' => $node->title,
+        'description' => t('Created on: @date', array('@date' => format_date($node->created))),
+      );
+    }
+    return $suggestions;
+  }
+}

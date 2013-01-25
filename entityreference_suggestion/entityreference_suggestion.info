@@ -1,0 +1,6 @@
+name = Entity Reference Suggestion
+description = Offers suggestions for entity references
+package = Fields
+dependencies[] = entityreference
+version = 7.x-1.x-dev
+core = 7.x
