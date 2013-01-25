@@ -43,6 +43,7 @@ function entityreference_suggestion_form_field_ui_field_edit_form_alter(&$form, 
       '#default_value' => isset($enabled) ? $enabled : NULL,
     );
 
+    // Provides a container for suggestion method if enabled
     $form['instance']['settings']['entityreference_suggestion']['method'] = array(
       '#type' => 'markup',
       '#prefix' => '<div id="entityreference_suggestion_widget_settings_'.$field_instance_id.'">',
@@ -150,9 +151,7 @@ function _entityreference_suggestion_popular_selections($element, $context) {
     $bundles[] = $field_instance['bundle'];
   }
 
-  // Query this field's table for recent entries
-  // Join the node table and order by created date desc
-  // Set to distinct to prevent duplicates
+  // Get all entries to this field, make sure nodes are published
   $query = db_select('field_data_'.$field_name, 'f');
   $query->join('node', 'n', 'f.entity_id = n.nid');
   $query->fields('f', array($field_name.'_target_id'))
