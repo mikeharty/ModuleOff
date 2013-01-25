@@ -23,7 +23,7 @@
             if ($input.attr('value') == '')
               $input.attr('value', suggestionValue+' ('+suggestionId+')');
             else
-              $input.attr('value', $input.attr('value') + ', '+suggestionValue);
+              $input.attr('value', $input.attr('value') + ', '+suggestionValue+' ('+suggestionId+')');
             break;
 
           // Radio/Checkboxes widget
