@@ -14,9 +14,10 @@ function entityreference_suggestion_theme() {
  * Implementation of hook_field_widget_settings_form_alter()
  */
 function entityreference_suggestion_form_field_ui_field_edit_form_alter(&$form, &$form_state) {
+
   // Check that this field is an entityreference field
   $field_info = field_info_field($form['#instance']['field_name']);
-  if ($field_info['module'] == 'entityreference') {
+  if ($field_info['module'] == 'entityreference' && $field_info['settings']['target_type'] == 'node') {
     // Save the field instance ID, used to make the AJAX wrapper unique
     $field_instance_id = $form['#instance']['id'];
 
@@ -101,7 +102,7 @@ function entityreference_suggestion_field_widget_form_alter(&$element, &$form_st
     }
 
     // If we have suggestions, theme them and add them to the field suffix
-    if(is_array($suggestions)){
+    if(count($suggestions)){
       $vars = array(
         'suggestions' => $suggestions,
         // Include method to provide label
