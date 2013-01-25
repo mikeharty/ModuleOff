@@ -187,7 +187,8 @@ function _entityreference_suggestion_popular_selections($element, $context) {
     );
   }
 
-  return $suggestions;
+  // Return top 5 suggestions
+  return array_splice($suggestions, 5);
 }
 
 /*
